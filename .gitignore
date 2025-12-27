@@ -1,0 +1,4 @@
+node_modules/
+uploads/*.mp3
+.DS_Store
+*.log

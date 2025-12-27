@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>For AMMU 💙❤️</title>
+    <title>My Music Player</title>
     <style>
         * {
             margin: 0;
@@ -89,6 +89,7 @@
             justify-content: center;
             align-items: center;
             gap: 15px;
+            flex-wrap: wrap;
         }
 
         .control-btn {
@@ -115,6 +116,24 @@
             width: 60px;
             height: 60px;
             font-size: 24px;
+        }
+
+        .control-btn.active {
+            background: #ffd700;
+            color: #667eea;
+        }
+
+        .secondary-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .control-btn.secondary {
+            width: 40px;
+            height: 40px;
+            font-size: 16px;
         }
 
         .playlist {
@@ -214,6 +233,11 @@
             border-color: #764ba2;
         }
 
+        .upload-area.uploading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
         .upload-icon {
             font-size: 40px;
             color: #667eea;
@@ -250,11 +274,17 @@
             padding: 30px;
             color: #999;
         }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎵 AMMU 💙❤️</h1>
+        <h1>🎵 My Music Player</h1>
 
         <div class="player-section">
             <div class="current-song">
@@ -276,11 +306,18 @@
                 <button class="control-btn play-pause" id="playPauseBtn">▶</button>
                 <button class="control-btn" id="nextBtn">⏭</button>
             </div>
+
+            <div class="secondary-controls">
+                <button class="control-btn secondary" id="shuffleBtn" title="Shuffle">🔀</button>
+                <button class="control-btn secondary" id="loopBtn" title="Loop Current Song">🔁</button>
+            </div>
         </div>
 
         <div class="playlist">
             <h3>Playlist</h3>
-            <div id="playlistContainer"></div>
+            <div id="playlistContainer">
+                <div class="loading">Loading songs...</div>
+            </div>
         </div>
 
         <div class="upload-section">
@@ -297,23 +334,11 @@
     <audio id="audioPlayer"></audio>
 
     <script>
-        // Initialize with your uploaded songs
-        let songs = [
-            {
-                id: 1,
-                name: 'Ammu Song 1',
-                file: '/mnt/user-data/uploads/ammu_',
-                duration: '0:00'
-            },
-            {
-                id: 2,
-                name: 'Ammu Song 2',
-                file: '/mnt/user-data/uploads/ammu_song_2.mp3',
-                duration: '0:00'
-            }
-        ];
-
+        let songs = [];
         let currentSongIndex = -1;
+        let isShuffleOn = false;
+        let isLoopOn = false;
+        let originalPlaylist = [];
         const audioPlayer = document.getElementById('audioPlayer');
         const playPauseBtn = document.getElementById('playPauseBtn');
         const prevBtn = document.getElementById('prevBtn');
@@ -328,6 +353,26 @@
         const uploadArea = document.getElementById('uploadArea');
         const uploadBtn = document.getElementById('uploadBtn');
         const fileInput = document.getElementById('fileInput');
+        const shuffleBtn = document.getElementById('shuffleBtn');
+        const loopBtn = document.getElementById('loopBtn');
+
+        // Load songs from server
+        async function loadSongs() {
+            try {
+                const response = await fetch('/api/songs');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                songs = Array.isArray(data) ? data : [];
+                console.log('Loaded songs:', songs);
+                renderPlaylist();
+            } catch (error) {
+                console.error('Error loading songs:', error);
+                songs = [];
+                renderPlaylist();
+            }
+        }
 
         // Render playlist
         function renderPlaylist() {
@@ -342,7 +387,7 @@
                         <div class="song-name">${song.name}</div>
                         <div class="song-duration">${song.duration}</div>
                     </div>
-                    <button class="delete-btn" onclick="deleteSong(${index}, event)">Delete</button>
+                    <button class="delete-btn" onclick="deleteSong(${index}, '${song.filename}', event)">Delete</button>
                 </div>
             `).join('');
 
@@ -364,8 +409,14 @@
             currentSongIndex = index;
             const song = songs[index];
             
+            console.log('Playing song:', song);
+            console.log('Song file path:', song.file);
+            
             audioPlayer.src = song.file;
-            audioPlayer.play();
+            audioPlayer.play().catch(err => {
+                console.error('Error playing audio:', err);
+                alert('Error playing song. Check console for details.');
+            });
             playPauseBtn.textContent = '⏸';
             
             currentSongName.textContent = song.name;
@@ -407,7 +458,10 @@
 
         // Auto play next song
         audioPlayer.addEventListener('ended', () => {
-            if (currentSongIndex < songs.length - 1) {
+            if (isLoopOn) {
+                audioPlayer.currentTime = 0;
+                audioPlayer.play();
+            } else if (currentSongIndex < songs.length - 1) {
                 playSong(currentSongIndex + 1);
             } else {
                 playSong(0);
@@ -447,24 +501,37 @@
         }
 
         // Delete song
-        function deleteSong(index, event) {
+        async function deleteSong(index, filename, event) {
             event.stopPropagation();
             
             if (confirm(`Are you sure you want to delete "${songs[index].name}"?`)) {
-                // If deleting current song
-                if (index === currentSongIndex) {
-                    audioPlayer.pause();
-                    audioPlayer.src = '';
-                    playPauseBtn.textContent = '▶';
-                    currentSongName.textContent = 'No song selected';
-                    currentSongArtist.textContent = 'Select a song to play';
-                    currentSongIndex = -1;
-                } else if (index < currentSongIndex) {
-                    currentSongIndex--;
+                try {
+                    const response = await fetch(`/api/songs/${filename}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        // If deleting current song
+                        if (index === currentSongIndex) {
+                            audioPlayer.pause();
+                            audioPlayer.src = '';
+                            playPauseBtn.textContent = '▶';
+                            currentSongName.textContent = 'No song selected';
+                            currentSongArtist.textContent = 'Select a song to play';
+                            currentSongIndex = -1;
+                        } else if (index < currentSongIndex) {
+                            currentSongIndex--;
+                        }
+                        
+                        songs.splice(index, 1);
+                        renderPlaylist();
+                    } else {
+                        alert('Failed to delete song');
+                    }
+                } catch (error) {
+                    console.error('Error deleting song:', error);
+                    alert('Error deleting song');
                 }
-                
-                songs.splice(index, 1);
-                renderPlaylist();
             }
         }
 
@@ -473,13 +540,15 @@
             fileInput.click();
         });
 
-        uploadArea.addEventListener('click', () => {
-            fileInput.click();
+        uploadArea.addEventListener('click', (e) => {
+            if (e.target === uploadArea || e.target.classList.contains('upload-icon') || e.target.classList.contains('upload-text')) {
+                fileInput.click();
+            }
         });
 
         fileInput.addEventListener('change', (e) => {
             handleFiles(e.target.files);
-            fileInput.value = ''; // Reset input
+            fileInput.value = '';
         });
 
         // Drag and drop
@@ -498,26 +567,105 @@
             handleFiles(e.dataTransfer.files);
         });
 
-        function handleFiles(files) {
-            Array.from(files).forEach(file => {
-                if (file.type === 'audio/mpeg' || file.type === 'audio/mp3') {
-                    const url = URL.createObjectURL(file);
-                    const newSong = {
-                        id: Date.now() + Math.random(),
-                        name: file.name.replace('.mp3', ''),
-                        file: url,
-                        duration: '0:00'
-                    };
-                    songs.push(newSong);
+        async function handleFiles(files) {
+            if (!files || files.length === 0) {
+                console.log('No files selected');
+                return;
+            }
+            
+            uploadArea.classList.add('uploading');
+            console.log(`Processing ${files.length} file(s)...`);
+            
+            for (const file of Array.from(files)) {
+                console.log('File details:', {
+                    name: file.name,
+                    type: file.type,
+                    size: file.size
+                });
+                
+                // Check if it's an MP3 file (by extension or MIME type)
+                const isMP3 = file.name.toLowerCase().endsWith('.mp3') || 
+                              file.type === 'audio/mpeg' || 
+                              file.type === 'audio/mp3';
+                
+                if (isMP3) {
+                    const formData = new FormData();
+                    formData.append('song', file);
+                    
+                    console.log(`Uploading ${file.name}...`);
+                    
+                    try {
+                        const response = await fetch('/api/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        console.log('Upload response status:', response.status);
+                        
+                        if (response.ok) {
+                            const newSong = await response.json();
+                            console.log('Song uploaded successfully:', newSong);
+                            songs.push(newSong);
+                            alert(`✅ "${file.name}" uploaded successfully!`);
+                        } else {
+                            const errorData = await response.json().catch(() => ({}));
+                            console.error('Upload failed:', errorData);
+                            alert(`❌ Failed to upload ${file.name}: ${errorData.error || 'Unknown error'}`);
+                        }
+                    } catch (error) {
+                        console.error('Error uploading file:', error);
+                        alert(`❌ Error uploading ${file.name}: ${error.message}`);
+                    }
                 } else {
-                    alert(`${file.name} is not an MP3 file. Please upload only MP3 files.`);
+                    console.warn(`File ${file.name} is not an MP3 file (type: ${file.type})`);
+                    alert(`❌ ${file.name} is not an MP3 file. Please upload only MP3 files.`);
                 }
-            });
+            }
+            
+            uploadArea.classList.remove('uploading');
+            console.log(`Total songs after upload: ${songs.length}`);
             renderPlaylist();
         }
 
-        // Initial render
-        renderPlaylist();
+        // Shuffle functionality
+        shuffleBtn.addEventListener('click', () => {
+            isShuffleOn = !isShuffleOn;
+            shuffleBtn.classList.toggle('active');
+            
+            if (isShuffleOn) {
+                originalPlaylist = [...songs];
+                const currentSong = currentSongIndex >= 0 ? songs[currentSongIndex] : null;
+                
+                for (let i = songs.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [songs[i], songs[j]] = [songs[j], songs[i]];
+                }
+                
+                if (currentSong) {
+                    currentSongIndex = songs.findIndex(s => s.id === currentSong.id);
+                }
+                
+                renderPlaylist();
+            } else {
+                const currentSong = currentSongIndex >= 0 ? songs[currentSongIndex] : null;
+                songs = [...originalPlaylist];
+                
+                if (currentSong) {
+                    currentSongIndex = songs.findIndex(s => s.id === currentSong.id);
+                }
+                
+                renderPlaylist();
+            }
+        });
+
+        // Loop functionality
+        loopBtn.addEventListener('click', () => {
+            isLoopOn = !isLoopOn;
+            loopBtn.classList.toggle('active');
+        });
+
+        // Initial load
+        loadSongs();
     </script>
 </body>
 </html>

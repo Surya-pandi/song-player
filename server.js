@@ -26,10 +26,17 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     fileFilter: function (req, file, cb) {
-        if (file.mimetype === 'audio/mpeg' || file.mimetype === 'audio/mp3') {
+        console.log('Checking uploaded file:', file.originalname, 'MIME type:', file.mimetype);
+        
+        // Accept MP3 files by MIME type or extension
+        const isMP3 = file.mimetype === 'audio/mpeg' || 
+                      file.mimetype === 'audio/mp3' ||
+                      file.originalname.toLowerCase().endsWith('.mp3');
+        
+        if (isMP3) {
             cb(null, true);
         } else {
-            cb(new Error('Only MP3 files are allowed!'), false);
+            cb(new Error(`Only MP3 files are allowed! Received: ${file.mimetype}`), false);
         }
     },
     limits: {
@@ -39,7 +46,14 @@ const upload = multer({
 
 // Serve static files
 app.use(express.static(__dirname));
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', express.static(uploadsDir, {
+    setHeaders: (res, filepath) => {
+        if (filepath.endsWith('.mp3')) {
+            res.setHeader('Content-Type', 'audio/mpeg');
+            res.setHeader('Accept-Ranges', 'bytes');
+        }
+    }
+}));
 app.use(express.json());
 
 // Serve the main page
@@ -51,6 +65,7 @@ app.get('/', (req, res) => {
 app.get('/api/songs', (req, res) => {
     fs.readdir(uploadsDir, (err, files) => {
         if (err) {
+            console.error('Error reading uploads directory:', err);
             return res.status(500).json({ error: 'Unable to read files' });
         }
         
@@ -64,6 +79,7 @@ app.get('/api/songs', (req, res) => {
                 duration: '0:00'
             }));
         
+        console.log(`Found ${songs.length} songs in uploads directory`);
         res.json(songs);
     });
 });
@@ -71,8 +87,11 @@ app.get('/api/songs', (req, res) => {
 // Upload new song
 app.post('/api/upload', upload.single('song'), (req, res) => {
     if (!req.file) {
+        console.error('No file uploaded in request');
         return res.status(400).json({ error: 'No file uploaded' });
     }
+    
+    console.log('File uploaded successfully:', req.file.filename);
     
     res.json({
         id: Date.now(),
@@ -81,6 +100,21 @@ app.post('/api/upload', upload.single('song'), (req, res) => {
         filename: req.file.filename,
         duration: '0:00'
     });
+});
+
+// Error handling middleware for multer
+app.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        console.error('Multer error:', error);
+        if (error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
+        }
+        return res.status(400).json({ error: error.message });
+    } else if (error) {
+        console.error('Upload error:', error);
+        return res.status(400).json({ error: error.message });
+    }
+    next();
 });
 
 // Delete song
